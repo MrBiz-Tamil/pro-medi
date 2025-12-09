@@ -1,0 +1,122 @@
+version: '3.8'
+
+# =============================================================================
+# PRODUCTION DEPLOYMENT INSTRUCTIONS:
+# 1. Create a .env file with all required environment variables
+# 2. NEVER commit .env to version control
+# 3. Use strong, unique passwords for all services
+# =============================================================================
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: medhub_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-medhub_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required for production}
+      POSTGRES_DB: ${POSTGRES_DB:-medhub_db}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - medhub-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-medhub_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: medhub_redis
+    restart: always
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    command: >
+      redis-server 
+      --appendonly yes 
+      --maxmemory 256mb 
+      --maxmemory-policy allkeys-lru
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    networks:
+      - medhub-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: medhub_api
+    restart: always
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      # Database configuration
+      DATABASE_URL: postgresql://${POSTGRES_USER:-medhub_user}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-medhub_db}
+      
+      # Redis configuration  
+      REDIS_URL: redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379/0
+      
+      # LiveKit configuration
+      LIVEKIT_HOST: ${LIVEKIT_HOST:-ws://livekit:7880}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      
+      # Security - MUST be set in production
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY is required for production}
+      
+      # Environment
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - medhub-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # LiveKit Server - Video/Audio calls
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: medhub_livekit
+    restart: always
+    ports:
+      - "7880:7880"
+      - "7881:7881"
+      - "5349:5349"
+      - "3478:3478/udp"
+      - "50000-60000:50000-60000/udp"
+    volumes:
+      - ./livekit/livekit.yaml:/livekit.yaml:ro
+    command: --config /livekit.yaml
+    environment:
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:?LIVEKIT_API_KEY is required}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:?LIVEKIT_API_SECRET is required}
+      - REDIS_URL=${REDIS_PASSWORD:+redis://default:${REDIS_PASSWORD}@redis:6379}
+      - REDIS_URL=${REDIS_PASSWORD:-redis://redis:6379}
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - medhub-network
+
+networks:
+  medhub-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:

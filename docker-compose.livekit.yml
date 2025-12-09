@@ -1,0 +1,126 @@
+# =====================================================
+# LiveKit Self-Hosted Docker Compose Configuration
+# For MedHub Telemedicine Platform
+# =====================================================
+#
+# This file contains the configuration for running a
+# self-hosted LiveKit server with TURN/STUN support
+# for reliable video/audio calls.
+#
+# Usage:
+#   docker-compose -f docker-compose.livekit.yml up -d
+#
+# Required Environment Variables:
+#   - LIVEKIT_API_KEY: API key for authentication
+#   - LIVEKIT_API_SECRET: API secret for token generation
+#   - LIVEKIT_DOMAIN: Your domain (e.g., livekit.yourdomain.com)
+#
+# =====================================================
+
+version: '3.8'
+
+services:
+  # ==================================================
+  # LiveKit Server - WebRTC SFU
+  # ==================================================
+  livekit:
+    image: livekit/livekit-server:latest
+    container_name: medhub-livekit
+    restart: unless-stopped
+    ports:
+      # WebSocket + API
+      - "7880:7880"
+      # RTC over TCP
+      - "7881:7881"
+      # TURN/STUN TLS
+      - "5349:5349"
+      # TURN/STUN UDP
+      - "3478:3478/udp"
+      # WebRTC UDP port range
+      - "50000-60000:50000-60000/udp"
+    volumes:
+      - ./livekit/livekit.yaml:/livekit.yaml:ro
+    command: --config /livekit.yaml
+    environment:
+      - LIVEKIT_API_KEY=${LIVEKIT_API_KEY:-devkey}
+      - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET:-secret123secretsecret}
+      - LIVEKIT_DOMAIN=${LIVEKIT_DOMAIN:-localhost}
+      - REDIS_URL=redis:6379
+    depends_on:
+      - redis
+    networks:
+      - medhub-network
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:7880"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  # ==================================================
+  # Redis - For LiveKit distributed state
+  # ==================================================
+  redis:
+    image: redis:7-alpine
+    container_name: medhub-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    networks:
+      - medhub-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # ==================================================
+  # LiveKit Egress - Recording Service (Optional)
+  # ==================================================
+  egress:
+    image: livekit/egress:latest
+    container_name: medhub-livekit-egress
+    restart: unless-stopped
+    environment:
+      - EGRESS_CONFIG_FILE=/egress.yaml
+    volumes:
+      - ./livekit/egress.yaml:/egress.yaml:ro
+      - egress-recordings:/recordings
+    depends_on:
+      - livekit
+      - redis
+    networks:
+      - medhub-network
+
+  # ==================================================
+  # TURN Server (Coturn) - For NAT traversal
+  # Optional: LiveKit has built-in TURN, but Coturn
+  # provides more control for complex networks
+  # ==================================================
+  # coturn:
+  #   image: coturn/coturn:latest
+  #   container_name: medhub-coturn
+  #   restart: unless-stopped
+  #   ports:
+  #     - "3478:3478"
+  #     - "3478:3478/udp"
+  #     - "5349:5349"
+  #     - "5349:5349/udp"
+  #     - "49152-65535:49152-65535/udp"
+  #   volumes:
+  #     - ./livekit/turnserver.conf:/etc/coturn/turnserver.conf:ro
+  #   networks:
+  #     - medhub-network
+
+networks:
+  medhub-network:
+    external: true
+
+volumes:
+  redis-data:
+    driver: local
+  egress-recordings:
+    driver: local
