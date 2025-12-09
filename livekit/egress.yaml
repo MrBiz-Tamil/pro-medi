@@ -1,0 +1,52 @@
+# =====================================================
+# LiveKit Egress Configuration
+# Recording and streaming configuration
+# =====================================================
+
+api_key: ${LIVEKIT_API_KEY:-devkey}
+api_secret: ${LIVEKIT_API_SECRET:-secret123secretsecret}
+ws_url: ws://livekit:7880
+
+# Redis connection for job queue
+redis:
+  address: redis:6379
+  db: 0
+
+# Health check port
+health_port: 9090
+
+# Template for room composite recordings
+room_composite:
+  # Video settings
+  video_width: 1280
+  video_height: 720
+  framerate: 30
+  
+  # Audio settings
+  audio_bitrate: 128
+  audio_frequency: 48000
+
+# S3 output for recordings
+file_output:
+  s3:
+    access_key: ${AWS_ACCESS_KEY_ID:-}
+    secret: ${AWS_SECRET_ACCESS_KEY:-}
+    region: ${AWS_REGION:-ap-south-1}
+    bucket: ${S3_BUCKET:-medhub-recordings}
+    # Optional: custom endpoint for S3-compatible storage
+    endpoint: ${S3_ENDPOINT:-}
+  
+  # Local fallback if S3 not configured
+  local:
+    path: /recordings
+
+# CPU limits for recording jobs
+cpu_cost:
+  room_composite: 3
+  web: 3
+  participant: 2
+  track_composite: 2
+  track: 1
+
+# Logging
+log_level: info
